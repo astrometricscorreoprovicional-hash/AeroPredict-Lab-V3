@@ -1,0 +1,9 @@
+{
+  "scenario": "leo_sat",
+  "duration_s": 5400,
+  "dt_s": 10,
+  "initial_state": {
+    "r0_km": 6771.0,
+    "v0_kms": 7.67
+  }
+}

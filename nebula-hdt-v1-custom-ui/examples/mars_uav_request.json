@@ -1,0 +1,10 @@
+{
+  "scenario": "mars_uav",
+  "duration_s": 45,
+  "dt_s": 0.1,
+  "initial_state": {
+    "lat": -4.59,
+    "lon": 137.44,
+    "alt": 5.0
+  }
+}
