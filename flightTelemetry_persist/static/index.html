@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flightTelemetry — Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%23111827'/%3E%3Cpath d='M8 34h20l6 10h4l-4-10h20v-4H34l4-10h-4l-6 10H8z' fill='%23ffffff'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#111827">
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0e1117;color:#eee;margin:0;padding:0;}
+  header{padding:14px 18px;background:#111827;border-bottom:1px solid #1f2937;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header h1{font-size:18px;margin:0}
+  .led{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:8px}
+  .ok{background:#22c55e}.warn{background:#f59e0b}.bad{background:#ef4444}
+  .wrap{display:grid;grid-template-columns: 2fr 1fr; gap:16px; padding:16px;}
+  .card{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:12px}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .muted{color:#94a3b8;font-size:12px}
+  input[type=text], input[type=datetime-local]{background:#0b1220;border:1px solid #1f2937;color:#e5e7eb;border-radius:8px;padding:8px}
+  input[type=datetime-local]{width:210px}
+  button{background:#2563eb;border:none;color:white;padding:8px 12px;border-radius:8px;cursor:pointer}
+  button.secondary{background:#374151}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .alerts .alert-card{padding:8px;border:1px solid #374151;border-radius:8px;margin-bottom:8px;background:#0b1220}
+  .alert-title{font-weight:600;margin-bottom:2px}
+  .alert-desc{color:#cbd5e1;font-size:14px}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;margin-right:8px;border:1px solid #374151}
+  .badge-danger{background:#7f1d1d;color:#fecaca;border-color:#991b1b}
+  .badge-warn{background:#78350f;color:#fde68a;border-color:#92400e}
+  .badge-info{background:#0f172a;color:#bfdbfe;border-color:#1f2937}
+  code{color:#a5b4fc}
+  .toolbar{display:flex;gap:8px;align-items:center;margin-left:auto}
+  @media print{
+    body{background:#fff;color:#000;}
+    header{display:none!important;}
+    input,button,.muted{display:none!important;}
+    .wrap{display:block;padding:0;margin:0;}
+    .card{border:0;background:#fff;padding:0;margin:0 0 12px 0;}
+    .row{display:block;}
+    #chart_speed,#chart_alt,#chart_pitch,#chart_xy{height:auto!important;}
+    .alerts .alert-card{border-color:#999;background:#fff;}
+    .badge-danger,.badge-warn,.badge-info{color:#000;border-color:#999;background:#fff;}
+    a[href]:after{content:" (" attr(href) ")"; font-size:10px;}
+  }
+</style>
+</head>
+<body>
+<header>
+  <span id="led" class="led bad"></span>
+  <h1>flightTelemetry — Dashboard</h1>
+  <div class="toolbar">
+    <span class="muted">API</span>
+    <input id="api" type="text" value="http://127.0.0.1:8000" style="width:220px">
+    <span class="muted">Desde</span><input id="from" type="datetime-local">
+    <span class="muted">Hasta</span><input id="to" type="datetime-local">
+    <button id="save">Usar</button>
+    <button id="print" class="secondary" title="Imprimir / Exportar PDF">Imprimir / Exportar</button>
+    <!-- Botón corregido para Excel -->
+    <button id="export" class="secondary" title="Exportar Excel (XLSX)">Exportar Excel (XLSX)</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="card">
+    <h3>Telemetría</h3>
+    <div class="row">
+      <div id="chart_speed" style="height:260px"></div>
+      <div id="chart_alt" style="height:260px"></div>
+    </div>
+    <div class="row">
+      <div id="chart_pitch" style="height:240px"></div>
+      <div id="chart_xy" style="height:240px"></div>
+    </div>
+    <div class="muted">Actualiza cada 1s. Usa el botón "Inyectar demo" o publica en <code>POST /ingest</code>.</div>
+  </div>
+
+  <div class="card">
+    <h3>Estado</h3>
+    <div id="status">Conectando…</div>
+    <h3 style="margin-top:16px">Alertas</h3>
+    <div id="alerts" class="alerts"></div>
+    <div class="row">
+      <button id="btn-seed">Inyectar demo</button>
+      <button id="btn-reset" style="background:#ef4444">Reset</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const elApi = document.getElementById('api');
+  const elFrom = document.getElementById('from');
+  const elTo = document.getElementById('to');
+  const elSave = document.getElementById('save');
+  const elPrint = document.getElementById('print');
+  const elExport = document.getElementById('export');
+  const elLed = document.getElementById('led');
+  const elStatus = document.getElementById('status');
+  const elAlerts = document.getElementById('alerts');
+
+  let API = localStorage.getItem('ft_api') || elApi.value;
+  elApi.value = API;
+
+  const savedFrom = localStorage.getItem('ft_from'); if(savedFrom) elFrom.value = savedFrom;
+  const savedTo   = localStorage.getItem('ft_to');   if(savedTo)   elTo.value   = savedTo;
+
+  elSave.onclick = () => {
+    API = elApi.value.trim();
+    localStorage.setItem('ft_api', API);
+    localStorage.setItem('ft_from', elFrom.value);
+    localStorage.setItem('ft_to', elTo.value);
+  };
+  elPrint.onclick = () => window.print();
+
+  // ====== CORREGIDO: exportar a EXCEL (.xlsx) ======
+  elExport.onclick = () => {
+    const p = new URLSearchParams();
+    const fromTs = toEpoch(elFrom.value);
+    const toTs   = toEpoch(elTo.value);
+    if(fromTs) p.set('from_ts', fromTs.toString());
+    if(toTs)   p.set('to_ts', toTs.toString());
+    if(!p.has('from_ts') && !p.has('to_ts')) p.set('n', '900');
+    // Endpoint actualizado a /export/xlsx
+    window.open(`${API}/export/xlsx?${p.toString()}`,'_blank');
+    // Si usaste el endpoint flexible, puedes cambiar a:
+    // window.open(`${API}/export?format=xlsx&${p.toString()}`,'_blank');
+  };
+
+  function toEpoch(dtLocal){
+    if(!dtLocal) return null;
+    const d = new Date(dtLocal);
+    if (isNaN(d.getTime())) return null;
+    return Math.round(d.getTime()/1000);
+  }
+
+  function led(state){ elLed.className = 'led ' + (state==='ok'?'ok':state==='warn'?'warn':'bad'); }
+  function fmt(n){ return (n==null || isNaN(n)) ? null : Number(n); }
+  async function j(url){ const r = await fetch(url); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
+
+  function plotEmpty(){
+    const style = {paper_bgcolor:'#111827',plot_bgcolor:'#111827',font:{color:'#e5e7eb'}};
+    Plotly.newPlot('chart_speed',[{x:[],y:[],mode:'lines',name:'speed'}],{...style,title:'Velocidad (m/s)'});
+    Plotly.newPlot('chart_alt',  [{x:[],y:[],mode:'lines',name:'alt'}],  {...style,title:'Altitud (m)'});
+    Plotly.newPlot('chart_pitch',[{x:[],y:[],mode:'lines',name:'pitch'}],{...style,title:'Pitch (rad)'});
+    Plotly.newPlot('chart_xy',   [{x:[],y:[],mode:'lines+markers',name:'XY'}], {...style,title:'Trayectoria XY',
+      yaxis:{scaleanchor:'x',scaleratio:1}});
+  }
+  plotEmpty();
+
+  const ALERT_COPY = {
+    high_pitch_attitude: { label: 'Actitud de pitch alta', sev: 'warn',
+      format: (a) => `Pitch ${fmt(a.value)?.toFixed(2)} rad (umbral ${fmt(a.threshold)?.toFixed(2)}).` },
+    high_bank_angle: { label: 'Ángulo de alabeo alto', sev: 'warn',
+      format: (a) => `Roll ${fmt(a.value)?.toFixed(2)} rad (umbral ${fmt(a.threshold)?.toFixed(2)}).` },
+    hard_landing_risk: { label: 'Riesgo de aterrizaje duro', sev: 'danger',
+      format: (a) => `Altitud ${fmt(a.altitude_m)?.toFixed(0)} m · V<sub>vertical</sub> ${fmt(a.vy_ms)?.toFixed(2)} m/s (descenso).` },
+    stall_risk: { label: 'Riesgo de pérdida (stall)', sev: 'danger',
+      format: (a) => `Velocidad ${fmt(a.speed_ms)?.toFixed(1)} m/s (umbral ${fmt(a.threshold)?.toFixed(1)}).` },
+    overspeed_low_altitude: { label: 'Alta velocidad a baja altitud', sev: 'danger',
+      format: (a) => `Velocidad ${fmt(a.speed_ms)?.toFixed(1)} m/s · Altitud ${fmt(a.altitude_m)?.toFixed(0)} m.` },
+    engine_out_low_altitude: { label: 'Motor fuera a baja altitud', sev: 'danger',
+      format: (a) => `Altitud ${fmt(a.altitude_m)?.toFixed(0)} m con motor OFF.` }
+  };
+
+  function badge(sev){
+    const klass = sev === 'danger' ? 'badge badge-danger'
+                : sev === 'warn'   ? 'badge badge-warn'
+                : 'badge badge-info';
+    const icon  = sev === 'danger' ? '⛔' : sev === 'warn' ? '⚠️' : 'ℹ️';
+    return `<span class="${klass}">${icon}</span>`;
+  }
+
+  const recentAlerts = new Map();
+  const keepMs = 7000;
+  function canonicalKey(a){
+    const obj = {}; const keys = Object.keys(a).sort();
+    for(const k of keys){ const v=a[k]; obj[k]=(typeof v==='number')?Number(Number(v).toFixed(2)):v; }
+    return JSON.stringify(obj);
+  }
+  function renderAlerts(alerts){
+    const now = Date.now();
+    for(const a of alerts){
+      const key = canonicalKey(a);
+      const entry = recentAlerts.get(key);
+      if (entry){ entry.last = now; entry.data = a; }
+      else { recentAlerts.set(key, { first: now, last: now, data: a }); }
+    }
+    for(const [key, entry] of Array.from(recentAlerts.entries())){
+      if (now - entry.last > keepMs) recentAlerts.delete(key);
+    }
+    const sevOrder = { danger: 0, warn: 1, info: 2 };
+    const items = Array.from(recentAlerts.values()).map(e => {
+      const a = e.data;
+      const meta = ALERT_COPY[a.type] || {label:(a.type||'Alerta'), sev:'info', format:(x)=> JSON.stringify(x)};
+      const ageSec = Math.max(0, Math.round((now - e.last)/1000));
+      return {
+        sev: meta.sev,
+        score: sevOrder[meta.sev] ?? 3,
+        html: `<div class="alert-card"><div class="alert-title">${badge(meta.sev)} ${meta.label} <span class="muted">· hace ${ageSec}s</span></div><div class="alert-desc">${meta.format(a)}</div></div>`
+      };
+    }).sort((a,b)=> a.score - b.score);
+    const el = document.getElementById('alerts');
+    el.innerHTML = items.length? "" : `<div class="alert-card" style="color:#93c5fd">Sin alertas</div>`;
+    for(const it of items){ const d=document.createElement("div"); d.innerHTML=it.html; el.appendChild(d); }
+  }
+
+  async function tick(){
+    try{
+      const data = await j(API + "/last?n=900");
+      if(!Array.isArray(data) || data.length===0){
+        elStatus.innerText = "Sin datos";
+        led('warn');
+      } else {
+        const lastTs = Math.max(...data.map(d=>d.ts||0));
+        const age = ((Date.now()/1000)-lastTs)|0;
+        elStatus.innerText = `Muestras: ${data.length} — Última hace ${age}s`;
+        led(age < 3 ? 'ok' : (age < 10 ? 'warn' : 'bad'));
+
+        const t = data.map(d => d.t ?? d.ts);
+        const x = data.map(d => Number(d.x));
+        const y = data.map(d => Number(d.y));
+        const vx = data.map(d => Number(d.vx));
+        const vy = data.map(d => Number(d.vy));
+        const pitch = data.map(d => Number(d.pitch));
+        const speed = vx.map((v,i)=> (isFinite(v) && isFinite(vy[i])) ? Math.sqrt(v*v + vy[i]*vy[i]) : null);
+
+        const style={paper_bgcolor:'#111827',plot_bgcolor:'#111827',font:{color:'#e5e7eb'}};
+        Plotly.react('chart_speed', [{x:t,y:speed,mode:'lines',name:'speed'}], {...style,title:'Velocidad (m/s)'});
+        Plotly.react('chart_alt',   [{x:t,y:y,mode:'lines',name:'alt'}],      {...style,title:'Altitud (m)'});
+        Plotly.react('chart_pitch', [{x:t,y:pitch,mode:'lines',name:'pitch'}], {...style,title:'Pitch (rad)'});
+        Plotly.react('chart_xy',    [{x:x,y:y,mode:'lines+markers',name:'XY'}],
+          {...style,title:'Trayectoria XY',yaxis:{scaleanchor:'x',scaleratio:1}});
+      }
+      const alerts = await j(API + "/alerts");
+      renderAlerts(alerts);
+    }catch(e){
+      elStatus.innerText = "Error: " + e.message;
+      led('bad');
+    }
+  }
+
+  async function seed(){
+    const now=Math.floor(Date.now()/1000);
+    const payload=[
+      {ts:now,t:0,x:0,y:10,vx:5,vy:0,pitch:0.55,roll:0.0,engine_out:0},
+      {ts:now+1,t:1,x:10,y:12,vx:5,vy:2,pitch:0.04,roll:0.65,engine_out:0},
+      {ts:now+2,t:2,x:20,y:15,vx:6,vy:3,pitch:0.03,roll:0.04,engine_out:1}
+    ];
+    await fetch(API+"/ingest",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  }
+  document.getElementById('btn-seed').onclick = seed;
+  document.getElementById('btn-reset').onclick = async () => { await fetch(API + "/reset", {method:"POST"}); };
+
+  setInterval(tick, 1000);
+  tick();
+</script>
+</body>
+</html>
